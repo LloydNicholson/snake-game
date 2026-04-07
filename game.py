@@ -460,7 +460,8 @@ class BitmapFont:
 
 
 def create_font(size, bold=False):
-    return BitmapFont(max(1, size // 7))
+    scale = 2 if size >= 24 else 1
+    return BitmapFont(scale)
 
 
 class Player:
@@ -870,9 +871,9 @@ class SnakeGame:
 
         controls = [
             "CONTROLS",
-            "Arrow keys / WASD",
-            "P - Pause",
-            "ESC - Quit",
+            "ARROWS / WASD",
+            "P - PAUSE",
+            "ESC - QUIT",
         ]
         for line in controls:
             surf = self.font_small.render(line, True, COLOR_TEXT_DIM)
