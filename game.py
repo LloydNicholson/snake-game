@@ -467,23 +467,22 @@ def create_font(size, bold=False):
     return BitmapFont(scale)
 
 
-def get_controller_mapping():
-    """Check for and configure controller"""
-    controller = None
-    if hasattr(pygame, "JOYDEV"):
-        try:
-            pygame.joystick.init()
-            if pygame.joystick.get_count() > 0:
-                controller = pygame.joystick.Joystick(0)
-                controller.init()
-        except Exception:
-            pass
-
-    return controller
+def get_all_controllers():
+    """Initialize and return all connected joysticks."""
+    controllers = []
+    try:
+        pygame.joystick.init()
+        for i in range(pygame.joystick.get_count()):
+            joy = pygame.joystick.Joystick(i)
+            joy.init()
+            controllers.append(joy)
+    except Exception:
+        pass
+    return controllers
 
 
 class Player:
-    def __init__(self, player_id, start_x, start_y, is_ai=True, has_controller=False):
+    def __init__(self, player_id, start_x, start_y, is_ai=True, has_controller=False, controller_idx=-1):
         self.player_id = player_id
         self.body = deque([(start_x, start_y)])
         self.direction = (1, 0)
@@ -491,6 +490,7 @@ class Player:
         self.is_alive = True
         self.is_ai = is_ai
         self.has_controller = has_controller
+        self.controller_idx = controller_idx
         self._ai_direction_timer = 0
         self.position = (start_x, start_y)
         self.waiting_to_rejoin = False
@@ -611,50 +611,32 @@ class SnakeGame:
         self.game_over = False
         self.paused = True  # Start paused until ready
         self.high_score = 0
-        self._controller = get_controller_mapping()
         self._initialize_players()
         self._place_food()
 
     def _initialize_players(self):
+        controllers = get_all_controllers()
+
         # Human player on keyboard
         self.players = [
             Player(1, BOARD_COLS // 4, BOARD_ROWS // 2, is_ai=False),
         ]
 
-        # Add controller players if available
-        if self._controller:
-            # Player 2 on controller
+        # One human player per connected controller (up to 2 extra)
+        for idx, _ in enumerate(controllers[:2]):
+            pid = len(self.players) + 1
+            x = BOARD_COLS * (idx + 2) // 3
+            y = BOARD_ROWS // 4
             self.players.append(
-                Player(
-                    2,
-                    BOARD_COLS * 3 // 4,
-                    BOARD_ROWS // 4,
-                    is_ai=False,
-                    has_controller=True,
-                )
+                Player(pid, x, y, is_ai=False, has_controller=True, controller_idx=idx)
             )
 
-            # Player 3 on controller (if second available)
-            if pygame.joystick.get_count() >= 2:
-                player3 = pygame.joystick.Joystick(1)
-                player3.init()
-                self.players.append(
-                    Player(
-                        3,
-                        BOARD_COLS // 2,
-                        BOARD_ROWS // 4,
-                        is_ai=False,
-                        has_controller=True,
-                    )
-                )
-
         # Fill remaining slots with AI
-        next_id = len(self.players) + 1
-        for i in range(3 - len(self.players)):
-            x = BOARD_COLS * (i + 2) // 3
+        while len(self.players) < 3:
+            pid = len(self.players) + 1
+            x = BOARD_COLS * (len(self.players)) // 3
             y = BOARD_ROWS // 4
-            self.players.append(Player(next_id, x, y, is_ai=True))
-            next_id += 1
+            self.players.append(Player(pid, x, y, is_ai=True))
 
     def _place_food(self, positions=None):
         if positions is None:
@@ -781,41 +763,40 @@ class SnakeGame:
                     player.set_direction(dir_map[event.key])
 
             if event.type == pygame.JOYBUTTONDOWN:
-                for player in self.players:
-                    if player.has_controller and player.waiting_to_rejoin:
-                        self._rejoin_player(player)
+                # Any button: restart, unpause, or rejoin
+                if self.game_over:
+                    self.reset()
+                    continue
+                if self.paused:
+                    self.paused = False
+                    continue
+                for p in self.players:
+                    if p.controller_idx == event.joy and p.waiting_to_rejoin:
+                        self._rejoin_player(p)
                         break
 
-        # Check for controller input
-        if self._controller and not self.game_over and not self.paused:
-            try:
-                # Check left stick movement
-                if self._controller.get_axis(0, 0):
-                    stick_x, stick_y = self._controller.get_axis(0, 0)
-                else:
-                    stick_x, stick_y = 0, 0
+            if event.type == pygame.JOYAXISMOTION:
+                if self.game_over or self.paused:
+                    continue
+                for p in self.players:
+                    if p.controller_idx != event.joy or not p.is_alive:
+                        continue
+                    if event.axis == 0 and abs(event.value) > 0.5:
+                        p.set_direction((1, 0) if event.value > 0 else (-1, 0))
+                    elif event.axis == 1 and abs(event.value) > 0.5:
+                        p.set_direction((0, 1) if event.value > 0 else (0, -1))
 
-                # Determine direction from stick position
-                if abs(stick_x) > 0.1:
-                    if stick_x > 0:
-                        if player.is_alive:
-                            player.set_direction((1, 0))
-                    elif stick_x < 0:
-                        if player.is_alive:
-                            player.set_direction((-1, 0))
-
-                # Check cross/right button for direction
-                if self._controller.get_button(1):  # X = 1 on most controllers
-                    player.set_direction((0, -1))
-                elif self._controller.get_button(0):  # A = 0 on most controllers
-                    player.set_direction((0, 1))
-                elif self._controller.get_button(2):  # B = 2 on most controllers
-                    player.set_direction((1, 0))
-                elif self._controller.get_button(3):  # Y = 3 on most controllers
-                    player.set_direction((-1, 0))
-
-            except:
-                pass
+            if event.type == pygame.JOYHATMOTION:
+                if self.game_over or self.paused:
+                    continue
+                hx, hy = event.value
+                for p in self.players:
+                    if p.controller_idx != event.joy or not p.is_alive:
+                        continue
+                    if hx != 0:
+                        p.set_direction((hx, 0))
+                    elif hy != 0:
+                        p.set_direction((0, -hy))  # pygame hat y is inverted
 
         return True
 
