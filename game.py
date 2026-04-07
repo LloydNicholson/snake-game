@@ -546,6 +546,11 @@ class Player:
 
         return new_head
 
+    def get_next_head(self):
+        head_x, head_y = self.body[0]
+        dx, dy = self.direction
+        return ((head_x + dx) % BOARD_COLS, (head_y + dy) % BOARD_ROWS)
+
     def check_collision(self, all_players):
         if not self.is_alive:
             return True
@@ -693,10 +698,10 @@ class SnakeGame:
             if not player.is_alive:
                 continue
 
-            ate_food = False
-            if player.get_head() in self.food:
-                ate_food = True
-                food_eaten.add(player.get_head())
+            next_head = player.get_next_head()
+            ate_food = next_head in self.food
+            if ate_food:
+                food_eaten.add(next_head)
 
             player.move(eat_food=ate_food)
 
@@ -705,8 +710,8 @@ class SnakeGame:
 
             if ate_food and player.is_alive:
                 player.score += 10
-                if player.get_head() in self.food:
-                    self.food.remove(player.get_head())
+                if next_head in self.food:
+                    self.food.remove(next_head)
 
         if food_eaten:
             self._place_food()
