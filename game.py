@@ -493,6 +493,7 @@ class Player:
         self.has_controller = has_controller
         self._ai_direction_timer = 0
         self.position = (start_x, start_y)
+        self.waiting_to_rejoin = False
 
     def set_direction(self, new_dir):
         current = self.direction
@@ -586,6 +587,8 @@ class Player:
                 check_body = check_body[1:]
             if (head_x, head_y) in check_body:
                 self.is_alive = False
+                if not self.is_ai:
+                    self.waiting_to_rejoin = True
                 return True
 
         return False
@@ -693,6 +696,7 @@ class SnakeGame:
             player.is_alive = True
             player.direction = (1, 0)
             player._ai_direction_timer = 0
+            player.waiting_to_rejoin = False
 
         # Reset new players based on their positions
         self.players[0].body = deque([(BOARD_COLS // 4, BOARD_ROWS // 2)])
@@ -704,6 +708,32 @@ class SnakeGame:
         self._place_food()
         self.game_over = False
         self.high_score = max(self.high_score, self.players[0].score)
+
+    def _find_safe_spawn(self, preferred_pos):
+        occupied = set()
+        for p in self.players:
+            if p.is_alive:
+                occupied.update(p.body)
+        occupied.update(self.food)
+        if preferred_pos not in occupied:
+            return preferred_pos
+        candidates = [
+            (x, y)
+            for x in range(BOARD_COLS)
+            for y in range(BOARD_ROWS)
+            if (x, y) not in occupied
+        ]
+        return random.choice(candidates) if candidates else preferred_pos
+
+    def _rejoin_player(self, player):
+        if not any(p.is_alive for p in self.players):
+            return
+        spawn = self._find_safe_spawn(player.position)
+        player.body = deque([spawn])
+        player.is_alive = True
+        player.waiting_to_rejoin = False
+        player.score = 0
+        player.direction = (1, 0)
 
     def handle_events(self):
         for event in pygame.event.get():
@@ -723,6 +753,16 @@ class SnakeGame:
                     continue
 
                 player = self.players[0]
+                if player.waiting_to_rejoin:
+                    rejoin_keys = {
+                        pygame.K_SPACE, pygame.K_RETURN,
+                        pygame.K_UP, pygame.K_DOWN, pygame.K_LEFT, pygame.K_RIGHT,
+                        pygame.K_w, pygame.K_s, pygame.K_a, pygame.K_d,
+                    }
+                    if event.key in rejoin_keys:
+                        self._rejoin_player(player)
+                    continue
+
                 if not player.is_alive:
                     continue
 
@@ -739,6 +779,12 @@ class SnakeGame:
 
                 if event.key in dir_map:
                     player.set_direction(dir_map[event.key])
+
+            if event.type == pygame.JOYBUTTONDOWN:
+                for player in self.players:
+                    if player.has_controller and player.waiting_to_rejoin:
+                        self._rejoin_player(player)
+                        break
 
         # Check for controller input
         if self._controller and not self.game_over and not self.paused:
@@ -807,24 +853,11 @@ class SnakeGame:
             self._place_food()
 
         alive_players = [p for p in self.players if p.is_alive]
-        human = self.players[0]
-        if not isinstance(human, int) and not human.is_alive:
-            self.game_over = False
-            # Rejoin dead players except if only 1 player exists
-            dead_count = len([p for p in self.players if not p.is_alive])
-            active_count = len(alive_players)
-            if active_count > 1:
-                for player in self.players:
-                    if not player.is_alive:
-                        player.is_alive = True
-                        player.body = deque([player.position])
-                        player.score = 0
-                        player.direction = (
-                            player.direction[0] * -1,
-                            player.direction[1],
-                        )
-            else:
-                self.high_score = max(self.high_score, human.score)
+        if not alive_players:
+            self.game_over = True
+            for p in self.players:
+                if not p.is_ai:
+                    self.high_score = max(self.high_score, p.score)
 
     def draw_grid(self):
         for x in range(0, GRID_WIDTH, CELL_SIZE):
@@ -948,7 +981,10 @@ class SnakeGame:
             player_icon = "🤖" if player.is_ai else "👤"
 
             full_label = f"{player_icon} {label}" if player.is_ai else label
-            status = "ALIVE" if player.is_alive else "DEAD"
+            if player.waiting_to_rejoin:
+                status = "REJOIN?"
+            else:
+                status = "ALIVE" if player.is_alive else "DEAD"
             color = PLAYER_COLORS[player.player_id - 1]["head"]
 
             name_surf = self.font_medium.render(full_label, True, color)
@@ -977,6 +1013,8 @@ class SnakeGame:
             y += 16
 
             status_color = color if player.is_alive else (150, 50, 50)
+            if player.waiting_to_rejoin:
+                status_color = (255, 220, 80)
             status_surf = self.font_small.render(status, True, status_color)
             self.screen.blit(status_surf, (sidebar_x + 25, y))
             y += 18
@@ -1037,6 +1075,16 @@ class SnakeGame:
         rect = text.get_rect(center=(GRID_WIDTH // 2, GRID_HEIGHT // 2))
         self.screen.blit(text, rect)
 
+    def draw_rejoin_prompt(self):
+        if not any(p.waiting_to_rejoin for p in self.players):
+            return
+        msg = "PRESS SPACE / BTN TO REJOIN"
+        surf = self.font_small.render(msg, True, (255, 220, 80))
+        rect = surf.get_rect(center=(GRID_WIDTH // 2, GRID_HEIGHT - 20))
+        bg = pygame.Rect(rect.x - 6, rect.y - 4, rect.width + 12, rect.height + 8)
+        pygame.draw.rect(self.screen, (20, 20, 20), bg, border_radius=4)
+        self.screen.blit(surf, rect)
+
     def draw(self):
         self.screen.fill(COLOR_BG)
         self.draw_grid()
@@ -1052,6 +1100,8 @@ class SnakeGame:
             self.draw_game_over()
         elif self.paused:
             self.draw_paused()
+        else:
+            self.draw_rejoin_prompt()
 
         pygame.display.flip()
 
