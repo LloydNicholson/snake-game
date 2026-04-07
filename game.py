@@ -616,6 +616,8 @@ class SnakeGame:
 
     def _initialize_players(self):
         controllers = get_all_controllers()
+        # Keep joystick objects alive; keyed by controller_idx (device index)
+        self._joysticks = {i: joy for i, joy in enumerate(controllers)}
 
         # Human player on keyboard
         self.players = [
@@ -775,28 +777,54 @@ class SnakeGame:
                         self._rejoin_player(p)
                         break
 
-            if event.type == pygame.JOYAXISMOTION:
-                if self.game_over or self.paused:
+        # Poll controller axes and D-pad each frame for direction
+        if not self.game_over and not self.paused:
+            for p in self.players:
+                if not p.has_controller or not p.is_alive:
                     continue
-                for p in self.players:
-                    if p.controller_idx != event.joy or not p.is_alive:
-                        continue
-                    if event.axis == 0 and abs(event.value) > 0.5:
-                        p.set_direction((1, 0) if event.value > 0 else (-1, 0))
-                    elif event.axis == 1 and abs(event.value) > 0.5:
-                        p.set_direction((0, 1) if event.value > 0 else (0, -1))
-
-            if event.type == pygame.JOYHATMOTION:
-                if self.game_over or self.paused:
+                joy = self._joysticks.get(p.controller_idx)
+                if joy is None:
                     continue
-                hx, hy = event.value
-                for p in self.players:
-                    if p.controller_idx != event.joy or not p.is_alive:
-                        continue
+                try:
+                    # D-pad has priority over stick
+                    hx, hy = joy.get_hat(0) if joy.get_numhats() > 0 else (0, 0)
                     if hx != 0:
                         p.set_direction((hx, 0))
                     elif hy != 0:
-                        p.set_direction((0, -hy))  # pygame hat y is inverted
+                        p.set_direction((0, -hy))  # hat y is inverted vs screen
+                    else:
+                        ax = joy.get_axis(0)
+                        ay = joy.get_axis(1)
+                        if abs(ax) > 0.5 and abs(ax) >= abs(ay):
+                            p.set_direction((1, 0) if ax > 0 else (-1, 0))
+                        elif abs(ay) > 0.5:
+                            p.set_direction((0, 1) if ay > 0 else (0, -1))
+                except Exception:
+                    pass
+
+        # Poll buttons for restart / unpause / rejoin
+        for p in self.players:
+            if not p.has_controller:
+                continue
+            joy = self._joysticks.get(p.controller_idx)
+            if joy is None:
+                continue
+            try:
+                any_pressed = any(joy.get_button(b) for b in range(joy.get_numbuttons()))
+                if any_pressed:
+                    if not hasattr(p, '_btn_was_pressed') or not p._btn_was_pressed:
+                        p._btn_was_pressed = True
+                        if self.game_over:
+                            self.reset()
+                            break
+                        if self.paused:
+                            self.paused = False
+                        elif p.waiting_to_rejoin:
+                            self._rejoin_player(p)
+                else:
+                    p._btn_was_pressed = False
+            except Exception:
+                pass
 
         return True
 
