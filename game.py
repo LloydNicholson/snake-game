@@ -1,8 +1,26 @@
+import os
 import random
 import sys
 from collections import deque
 
 import pygame
+
+
+class _NullSound:
+    def play(self): pass
+
+
+def _resource_path(relative):
+    base = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, relative)
+
+
+SOUND_EAT = _NullSound()
+SOUND_SNAKE = _NullSound()
+SOUND_SNAPE = _NullSound()
+SOUND_EXPLODE = _NullSound()
+
+SHIELD_BUTTONS = {4, 5}
 
 # Configuration Constants
 BOARD_COLS = 40
@@ -494,6 +512,8 @@ class Player:
         self._ai_direction_timer = 0
         self.position = (start_x, start_y)
         self.waiting_to_rejoin = False
+        self.resilient = False
+        self._shield_btn_was_pressed = False
 
     def set_direction(self, new_dir):
         current = self.direction
@@ -586,6 +606,9 @@ class Player:
             if p.player_id == self.player_id:
                 check_body = check_body[1:]
             if (head_x, head_y) in check_body:
+                if self.resilient and len(self.body) > 1:
+                    self.body.pop()
+                    return False
                 self.is_alive = False
                 if not self.is_ai:
                     self.waiting_to_rejoin = True
@@ -600,12 +623,14 @@ class Player:
 class SnakeGame:
     def __init__(self):
         pygame.init()
+        pygame.mixer.init()
         self.screen = pygame.display.set_mode((WINDOW_WIDTH, GRID_HEIGHT))
         pygame.display.set_caption("Snake Game")
         self.clock = pygame.time.Clock()
         self.font_large = create_font(24, bold=True)
         self.font_medium = create_font(18)
         self.font_small = create_font(14)
+        self._init_sounds()
         self.players = []
         self.food = deque()
         self.game_over = False
@@ -614,10 +639,23 @@ class SnakeGame:
         self._initialize_players()
         self._place_food()
 
+    def _init_sounds(self):
+        def load(name):
+            try:
+                return pygame.mixer.Sound(_resource_path(os.path.join('data', name)))
+            except Exception:
+                return _NullSound()
+
+        global SOUND_EAT, SOUND_SNAKE, SOUND_SNAPE, SOUND_EXPLODE
+        SOUND_EAT     = load('eat.wav')
+        SOUND_SNAKE   = load('snake.wav')
+        SOUND_SNAPE   = load('snape.wav')
+        SOUND_EXPLODE = load('explode.wav')
+
     def _initialize_players(self):
         controllers = get_all_controllers()
-        # Keep joystick objects alive; keyed by controller_idx (device index)
-        self._joysticks = {i: joy for i, joy in enumerate(controllers)}
+        # Keep joystick objects alive; keyed by joystick instance id.
+        self._joysticks = {joy.get_instance_id(): joy for joy in controllers}
 
         # Human player on keyboard
         self.players = [
@@ -625,12 +663,19 @@ class SnakeGame:
         ]
 
         # One human player per connected controller (up to 2 extra)
-        for idx, _ in enumerate(controllers[:2]):
+        for idx, joy in enumerate(controllers[:2]):
             pid = len(self.players) + 1
             x = BOARD_COLS * (idx + 2) // 3
             y = BOARD_ROWS // 4
             self.players.append(
-                Player(pid, x, y, is_ai=False, has_controller=True, controller_idx=idx)
+                Player(
+                    pid,
+                    x,
+                    y,
+                    is_ai=False,
+                    has_controller=True,
+                    controller_idx=joy.get_instance_id(),
+                )
             )
 
         # Fill remaining slots with AI
@@ -731,6 +776,9 @@ class SnakeGame:
                 if event.key == pygame.K_p:
                     self.paused = not self.paused
 
+                if event.key == pygame.K_t and not self.game_over:
+                    self.players[0].resilient = not self.players[0].resilient
+
                 if self.game_over:
                     if event.key in (pygame.K_RETURN, pygame.K_SPACE):
                         self.reset()
@@ -765,7 +813,14 @@ class SnakeGame:
                     player.set_direction(dir_map[event.key])
 
             if event.type == pygame.JOYBUTTONDOWN:
-                # Any button: restart, unpause, or rejoin
+                # Shoulder buttons toggle shield mode for this controller's player
+                if event.button in SHIELD_BUTTONS and not self.game_over:
+                    for p in self.players:
+                        if p.controller_idx == event.joy and p.has_controller:
+                            p.resilient = not p.resilient
+                            p._shield_btn_was_pressed = True
+                    continue
+                # Any other button: restart, unpause, or rejoin
                 if self.game_over:
                     self.reset()
                     continue
@@ -810,6 +865,16 @@ class SnakeGame:
             if joy is None:
                 continue
             try:
+                shield_pressed = any(
+                    b < joy.get_numbuttons() and joy.get_button(b) for b in SHIELD_BUTTONS
+                )
+                if shield_pressed:
+                    if not p._shield_btn_was_pressed:
+                        p.resilient = not p.resilient
+                        p._shield_btn_was_pressed = True
+                else:
+                    p._shield_btn_was_pressed = False
+
                 any_pressed = any(joy.get_button(b) for b in range(joy.get_numbuttons()))
                 if any_pressed:
                     if not hasattr(p, '_btn_was_pressed') or not p._btn_was_pressed:
@@ -857,11 +922,17 @@ class SnakeGame:
                 player.score += 10
                 if next_head in self.food:
                     self.food.remove(next_head)
-
-        if food_eaten:
-            self._place_food()
+                    self._place_food()
+                    SOUND_SNAKE.play()
 
         alive_players = [p for p in self.players if p.is_alive]
+
+        if not food_eaten or not alive_players:
+            SOUND_SNAPE.play()
+
+        if not food_eaten and alive_players:
+            SOUND_EXPLODE.play()
+
         if not alive_players:
             self.game_over = True
             for p in self.players:
@@ -990,6 +1061,8 @@ class SnakeGame:
             player_icon = "🤖" if player.is_ai else "👤"
 
             full_label = f"{player_icon} {label}" if player.is_ai else label
+            if player.resilient:
+                full_label += " [S]"
             if player.waiting_to_rejoin:
                 status = "REJOIN?"
             else:
@@ -1041,6 +1114,7 @@ class SnakeGame:
             "CONTROLS",
             "ARROWS / WASD",
             "P - PAUSE",
+            "T / SHOULDER - SHIELD",
             "ESC - QUIT",
         ]
         for line in controls:
