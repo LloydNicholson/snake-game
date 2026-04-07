@@ -1,4 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
+import sys
 
 
 a = Analysis(
@@ -36,9 +37,11 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
 )
-app = BUNDLE(
-    exe,
-    name='snake_game.app',
-    icon=None,
-    bundle_identifier=None,
-)
+
+if sys.platform == 'darwin':
+    app = BUNDLE(
+        exe,
+        name='snake_game.app',
+        icon=None,
+        bundle_identifier=None,
+    )
