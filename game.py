@@ -423,7 +423,10 @@ def render_bitmap_text(text, color, scale):
             widths.append(len(line) * (char_width + char_spacing) - char_spacing)
 
     surface = pygame.Surface(
-        (max(1, max(widths, default=0)), max(1, len(lines) * char_height + max(0, len(lines) - 1) * line_spacing)),
+        (
+            max(1, max(widths, default=0)),
+            max(1, len(lines) * char_height + max(0, len(lines) - 1) * line_spacing),
+        ),
         pygame.SRCALPHA,
     )
 
@@ -464,15 +467,32 @@ def create_font(size, bold=False):
     return BitmapFont(scale)
 
 
+def get_controller_mapping():
+    """Check for and configure controller"""
+    controller = None
+    if hasattr(pygame, "JOYDEV"):
+        try:
+            pygame.joystick.init()
+            if pygame.joystick.get_count() > 0:
+                controller = pygame.joystick.Joystick(0)
+                controller.init()
+        except Exception:
+            pass
+
+    return controller
+
+
 class Player:
-    def __init__(self, player_id, start_x, start_y, is_ai=True):
+    def __init__(self, player_id, start_x, start_y, is_ai=True, has_controller=False):
         self.player_id = player_id
         self.body = deque([(start_x, start_y)])
         self.direction = (1, 0)
         self.score = 0
         self.is_alive = True
         self.is_ai = is_ai
+        self.has_controller = has_controller
         self._ai_direction_timer = 0
+        self.position = (start_x, start_y)
 
     def set_direction(self, new_dir):
         current = self.direction
@@ -577,7 +597,7 @@ class Player:
 class SnakeGame:
     def __init__(self):
         pygame.init()
-        self.screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
+        self.screen = pygame.display.set_mode((WINDOW_WIDTH, GRID_HEIGHT))
         pygame.display.set_caption("Snake Game")
         self.clock = pygame.time.Clock()
         self.font_large = create_font(24, bold=True)
@@ -586,17 +606,52 @@ class SnakeGame:
         self.players = []
         self.food = deque()
         self.game_over = False
-        self.paused = False
+        self.paused = True  # Start paused until ready
         self.high_score = 0
+        self._controller = get_controller_mapping()
         self._initialize_players()
         self._place_food()
 
     def _initialize_players(self):
+        # Human player on keyboard
         self.players = [
             Player(1, BOARD_COLS // 4, BOARD_ROWS // 2, is_ai=False),
-            Player(2, BOARD_COLS * 3 // 4, BOARD_ROWS // 4, is_ai=True),
-            Player(3, BOARD_COLS // 2, BOARD_ROWS // 4, is_ai=True),
         ]
+
+        # Add controller players if available
+        if self._controller:
+            # Player 2 on controller
+            self.players.append(
+                Player(
+                    2,
+                    BOARD_COLS * 3 // 4,
+                    BOARD_ROWS // 4,
+                    is_ai=False,
+                    has_controller=True,
+                )
+            )
+
+            # Player 3 on controller (if second available)
+            if pygame.joystick.get_count() >= 2:
+                player3 = pygame.joystick.Joystick(1)
+                player3.init()
+                self.players.append(
+                    Player(
+                        3,
+                        BOARD_COLS // 2,
+                        BOARD_ROWS // 4,
+                        is_ai=False,
+                        has_controller=True,
+                    )
+                )
+
+        # Fill remaining slots with AI
+        next_id = len(self.players) + 1
+        for i in range(3 - len(self.players)):
+            x = BOARD_COLS * (i + 2) // 3
+            y = BOARD_ROWS // 4
+            self.players.append(Player(next_id, x, y, is_ai=True))
+            next_id += 1
 
     def _place_food(self, positions=None):
         if positions is None:
@@ -631,6 +686,7 @@ class SnakeGame:
         return list(self.food)
 
     def reset(self):
+        # Reset all existing players
         for player in self.players:
             player.body.clear()
             player.score = 0
@@ -638,9 +694,11 @@ class SnakeGame:
             player.direction = (1, 0)
             player._ai_direction_timer = 0
 
+        # Reset new players based on their positions
         self.players[0].body = deque([(BOARD_COLS // 4, BOARD_ROWS // 2)])
-        self.players[1].body = deque([(BOARD_COLS * 3 // 4, BOARD_ROWS // 4)])
-        self.players[2].body = deque([(BOARD_COLS // 2, BOARD_ROWS // 4)])
+        for i in range(1, len(self.players)):
+            x, y = self.players[i].position
+            self.players[i].body = deque([(x, y)])
 
         self.food.clear()
         self._place_food()
@@ -682,6 +740,37 @@ class SnakeGame:
                 if event.key in dir_map:
                     player.set_direction(dir_map[event.key])
 
+        # Check for controller input
+        if self._controller and not self.game_over and not self.paused:
+            try:
+                # Check left stick movement
+                if self._controller.get_axis(0, 0):
+                    stick_x, stick_y = self._controller.get_axis(0, 0)
+                else:
+                    stick_x, stick_y = 0, 0
+
+                # Determine direction from stick position
+                if abs(stick_x) > 0.1:
+                    if stick_x > 0:
+                        if player.is_alive:
+                            player.set_direction((1, 0))
+                    elif stick_x < 0:
+                        if player.is_alive:
+                            player.set_direction((-1, 0))
+
+                # Check cross/right button for direction
+                if self._controller.get_button(1):  # X = 1 on most controllers
+                    player.set_direction((0, -1))
+                elif self._controller.get_button(0):  # A = 0 on most controllers
+                    player.set_direction((0, 1))
+                elif self._controller.get_button(2):  # B = 2 on most controllers
+                    player.set_direction((1, 0))
+                elif self._controller.get_button(3):  # Y = 3 on most controllers
+                    player.set_direction((-1, 0))
+
+            except:
+                pass
+
         return True
 
     def process_game_tick(self):
@@ -719,9 +808,23 @@ class SnakeGame:
 
         alive_players = [p for p in self.players if p.is_alive]
         human = self.players[0]
-        if not human.is_alive:
-            self.game_over = True
-            self.high_score = max(self.high_score, human.score)
+        if not isinstance(human, int) and not human.is_alive:
+            self.game_over = False
+            # Rejoin dead players except if only 1 player exists
+            dead_count = len([p for p in self.players if not p.is_alive])
+            active_count = len(alive_players)
+            if active_count > 1:
+                for player in self.players:
+                    if not player.is_alive:
+                        player.is_alive = True
+                        player.body = deque([player.position])
+                        player.score = 0
+                        player.direction = (
+                            player.direction[0] * -1,
+                            player.direction[1],
+                        )
+            else:
+                self.high_score = max(self.high_score, human.score)
 
     def draw_grid(self):
         for x in range(0, GRID_WIDTH, CELL_SIZE):
@@ -738,6 +841,8 @@ class SnakeGame:
 
     def draw_snake(self, player):
         colors = PLAYER_COLORS[player.player_id - 1]
+        # Highlight human player's snake in green border
+        highlight_color = (0, 255, 0) if not player.is_ai else (50, 50, 50)
 
         for i, (x, y) in enumerate(player.body):
             rect = pygame.Rect(
@@ -748,6 +853,13 @@ class SnakeGame:
             )
             color = colors["head"] if i == 0 else colors["body"]
             pygame.draw.rect(self.screen, color, rect, border_radius=4)
+
+            # Add highlight border for human player
+            if i == 0 and not player.is_alive:
+                continue
+
+            if not player.is_ai and i == 0:
+                pygame.draw.rect(self.screen, highlight_color, rect, 2, border_radius=4)
 
             if i == 0 and player.is_alive:
                 eye_size = 3
@@ -785,6 +897,12 @@ class SnakeGame:
                 CELL_SIZE - 4,
             )
             pygame.draw.rect(self.screen, color, rect, border_radius=CELL_SIZE // 2)
+
+    def _draw_icon(self, x, y, icon_name, size=12):
+        icon = self.font_small.render(icon_name, True, COLOR_TEXT)
+        icon_x = x - icon.get_width() // 2
+        icon_y = y - size // 2
+        self.screen.blit(icon, (icon_x, icon_y))
 
     def draw_sidebar(self):
         sidebar_x = GRID_WIDTH
@@ -827,10 +945,13 @@ class SnakeGame:
 
         for player in self.players:
             label = "YOU" if not player.is_ai else f"P{player.player_id}"
+            player_icon = "🤖" if player.is_ai else "👤"
+
+            full_label = f"{player_icon} {label}" if player.is_ai else label
             status = "ALIVE" if player.is_alive else "DEAD"
             color = PLAYER_COLORS[player.player_id - 1]["head"]
 
-            name_surf = self.font_medium.render(label, True, color)
+            name_surf = self.font_medium.render(full_label, True, color)
             self.screen.blit(name_surf, (sidebar_x + 15, y))
             y += 18
 
@@ -879,6 +1000,11 @@ class SnakeGame:
             surf = self.font_small.render(line, True, COLOR_TEXT_DIM)
             self.screen.blit(surf, (sidebar_x + 15, y))
             y += 18
+
+        y += 5
+        control_text = self.font_small.render("YOU: GREEN BORDER", True, (0, 255, 0))
+        control_text.set_alpha(180)
+        self.screen.blit(control_text, (sidebar_x + 15, y))
 
     def draw_game_over(self):
         overlay = pygame.Surface((GRID_WIDTH, GRID_HEIGHT), pygame.SRCALPHA)
