@@ -9,17 +9,22 @@ if [ ! -x venv/bin/python ]; then
     python3 -m venv venv
 fi
 
-if ! ./venv/bin/python - <<'PY' >/dev/null 2>&1
+platform="$(uname -s)"
+if [ "$platform" = "Darwin" ]; then
+    ./venv/bin/pip uninstall -y pygame >/dev/null 2>&1 || true
+    if ! ./venv/bin/python - <<'PY' >/dev/null 2>&1
 import pygame.mixer
 PY
-then
-    echo "Installing audio-enabled pygame..."
-    ./venv/bin/pip install --quiet --upgrade --force-reinstall pygame-ce
+    then
+        echo "Installing audio-enabled pygame..."
+        ./venv/bin/pip install --quiet --upgrade --force-reinstall pygame-ce
+    fi
+else
+    ./venv/bin/pip uninstall -y pygame-ce >/dev/null 2>&1 || true
+    ./venv/bin/pip install --quiet --upgrade --force-reinstall pygame
 fi
 
-if [ ! -f venv/bin/pyinstaller ]; then
-    ./venv/bin/pip install --quiet --upgrade pyinstaller
-fi
+./venv/bin/pip install --quiet --upgrade pyinstaller
 
 echo "Cleaning old build..."
 rm -rf dist build/*/ __pycache__

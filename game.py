@@ -487,6 +487,34 @@ def create_font(size, bold=False):
     return BitmapFont(scale)
 
 
+IGNORED_CONTROLLER_NAME_PARTS = (
+    "remote desktop",
+    "remote",
+    "rdp",
+    "vnc",
+    "virtual",
+    "dummy",
+    "keyboard",
+    "mouse",
+    "touchpad",
+)
+
+
+def _is_likely_game_controller(joy):
+    try:
+        name = joy.get_name().lower()
+    except Exception:
+        return False
+
+    if any(part in name for part in IGNORED_CONTROLLER_NAME_PARTS):
+        return False
+
+    try:
+        return joy.get_numaxes() >= 2 and joy.get_numbuttons() >= 2
+    except Exception:
+        return False
+
+
 def get_all_controllers():
     """Initialize and return all connected joysticks."""
     controllers = []
@@ -495,7 +523,8 @@ def get_all_controllers():
         for i in range(pygame.joystick.get_count()):
             joy = pygame.joystick.Joystick(i)
             joy.init()
-            controllers.append(joy)
+            if _is_likely_game_controller(joy):
+                controllers.append(joy)
     except Exception:
         pass
     return controllers
@@ -966,10 +995,11 @@ class SnakeGame:
         if not food_eaten and alive_players:
             SOUND_EXPLODE.play()
 
-        human = self.players[0]
-        if not human.is_alive:
+        if not alive_players:
             self.game_over = True
-            self.high_score = max(self.high_score, human.score)
+            for player in self.players:
+                if not player.is_ai:
+                    self.high_score = max(self.high_score, player.score)
 
     def draw_grid(self):
         for x in range(0, GRID_WIDTH, CELL_SIZE):
