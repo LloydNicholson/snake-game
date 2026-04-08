@@ -1,17 +1,19 @@
 import os
 import random
 import sys
+import warnings
 from collections import deque
 
 import pygame
 
 
 class _NullSound:
-    def play(self): pass
+    def play(self):
+        pass
 
 
 def _resource_path(relative):
-    base = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(base, relative)
 
 
@@ -500,7 +502,15 @@ def get_all_controllers():
 
 
 class Player:
-    def __init__(self, player_id, start_x, start_y, is_ai=True, has_controller=False, controller_idx=-1):
+    def __init__(
+        self,
+        player_id,
+        start_x,
+        start_y,
+        is_ai=True,
+        has_controller=False,
+        controller_idx=-1,
+    ):
         self.player_id = player_id
         self.body = deque([(start_x, start_y)])
         self.direction = (1, 0)
@@ -623,7 +633,14 @@ class Player:
 class SnakeGame:
     def __init__(self):
         pygame.init()
-        pygame.mixer.init()
+        self.audio_enabled = False
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", RuntimeWarning)
+                pygame.mixer.init()
+            self.audio_enabled = True
+        except (ModuleNotFoundError, NotImplementedError):
+            pass
         self.screen = pygame.display.set_mode((WINDOW_WIDTH, GRID_HEIGHT))
         pygame.display.set_caption("Snake Game")
         self.clock = pygame.time.Clock()
@@ -640,17 +657,23 @@ class SnakeGame:
         self._place_food()
 
     def _init_sounds(self):
+        if not self.audio_enabled:
+            globals()["SOUND_EAT"] = _NullSound()
+            globals()["SOUND_SNAKE"] = _NullSound()
+            globals()["SOUND_SNAPE"] = _NullSound()
+            globals()["SOUND_EXPLODE"] = _NullSound()
+            return
+
         def load(name):
             try:
-                return pygame.mixer.Sound(_resource_path(os.path.join('data', name)))
+                return pygame.mixer.Sound(_resource_path(os.path.join("data", name)))
             except Exception:
                 return _NullSound()
 
-        global SOUND_EAT, SOUND_SNAKE, SOUND_SNAPE, SOUND_EXPLODE
-        SOUND_EAT     = load('eat.wav')
-        SOUND_SNAKE   = load('snake.wav')
-        SOUND_SNAPE   = load('snape.wav')
-        SOUND_EXPLODE = load('explode.wav')
+        globals()["SOUND_EAT"] = load("eat.wav")
+        globals()["SOUND_SNAKE"] = load("snake.wav")
+        globals()["SOUND_SNAPE"] = load("snape.wav")
+        globals()["SOUND_EXPLODE"] = load("explode.wav")
 
     def _initialize_players(self):
         controllers = get_all_controllers()
@@ -787,9 +810,16 @@ class SnakeGame:
                 player = self.players[0]
                 if player.waiting_to_rejoin:
                     rejoin_keys = {
-                        pygame.K_SPACE, pygame.K_RETURN,
-                        pygame.K_UP, pygame.K_DOWN, pygame.K_LEFT, pygame.K_RIGHT,
-                        pygame.K_w, pygame.K_s, pygame.K_a, pygame.K_d,
+                        pygame.K_SPACE,
+                        pygame.K_RETURN,
+                        pygame.K_UP,
+                        pygame.K_DOWN,
+                        pygame.K_LEFT,
+                        pygame.K_RIGHT,
+                        pygame.K_w,
+                        pygame.K_s,
+                        pygame.K_a,
+                        pygame.K_d,
                     }
                     if event.key in rejoin_keys:
                         self._rejoin_player(player)
@@ -866,7 +896,8 @@ class SnakeGame:
                 continue
             try:
                 shield_pressed = any(
-                    b < joy.get_numbuttons() and joy.get_button(b) for b in SHIELD_BUTTONS
+                    b < joy.get_numbuttons() and joy.get_button(b)
+                    for b in SHIELD_BUTTONS
                 )
                 if shield_pressed:
                     if not p._shield_btn_was_pressed:
@@ -875,9 +906,11 @@ class SnakeGame:
                 else:
                     p._shield_btn_was_pressed = False
 
-                any_pressed = any(joy.get_button(b) for b in range(joy.get_numbuttons()))
+                any_pressed = any(
+                    joy.get_button(b) for b in range(joy.get_numbuttons())
+                )
                 if any_pressed:
-                    if not hasattr(p, '_btn_was_pressed') or not p._btn_was_pressed:
+                    if not hasattr(p, "_btn_was_pressed") or not p._btn_was_pressed:
                         p._btn_was_pressed = True
                         if self.game_over:
                             self.reset()
@@ -933,11 +966,10 @@ class SnakeGame:
         if not food_eaten and alive_players:
             SOUND_EXPLODE.play()
 
-        if not alive_players:
+        human = self.players[0]
+        if not human.is_alive:
             self.game_over = True
-            for p in self.players:
-                if not p.is_ai:
-                    self.high_score = max(self.high_score, p.score)
+            self.high_score = max(self.high_score, human.score)
 
     def draw_grid(self):
         for x in range(0, GRID_WIDTH, CELL_SIZE):

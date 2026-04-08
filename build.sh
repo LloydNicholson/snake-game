@@ -4,10 +4,21 @@ set -e
 cd "$(dirname "$0")"
 
 # Create venv and install dependencies if missing
-if [ ! -f venv/bin/pyinstaller ]; then
+if [ ! -x venv/bin/python ]; then
     echo "Setting up build environment..."
     python3 -m venv venv
-    ./venv/bin/pip install --quiet pygame pyinstaller
+fi
+
+if ! ./venv/bin/python - <<'PY' >/dev/null 2>&1
+import pygame.mixer
+PY
+then
+    echo "Installing audio-enabled pygame..."
+    ./venv/bin/pip install --quiet --upgrade --force-reinstall pygame-ce
+fi
+
+if [ ! -f venv/bin/pyinstaller ]; then
+    ./venv/bin/pip install --quiet --upgrade pyinstaller
 fi
 
 echo "Cleaning old build..."
